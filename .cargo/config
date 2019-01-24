@@ -1,0 +1,2 @@
+[build]
+rustflags = ["-C", "link-args=-Wl,--dynamic-list=/home/lwerling/src/libthread_db/dynamic_list.h"]

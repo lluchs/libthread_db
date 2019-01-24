@@ -1,0 +1,10 @@
+{
+	ps_getpid;
+	ps_pdread;
+	ps_pdwrite;
+	ps_pglobal_lookup;
+	ps_lgetregs;
+	ps_lsetregs;
+	ps_lgetfpregs;
+	ps_lsetfpregs;
+};
