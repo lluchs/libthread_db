@@ -152,7 +152,7 @@ pub unsafe extern "C" fn ps_pdread(handle: *mut ProcHandle, ps_addr: *mut PsAddr
                     *target_ptr = data;
                 } else {
                     // Last partial read
-                    *target_ptr = ((usize::max_value() >> size) & data) | ((usize::max_value() << (step - size)) & *target_ptr);
+                    std::ptr::copy_nonoverlapping(&data as *const _ as *const u8, target_ptr as *mut u8, size);
                     break;
                 }
             },
@@ -165,27 +165,29 @@ pub unsafe extern "C" fn ps_pdread(handle: *mut ProcHandle, ps_addr: *mut PsAddr
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ps_pdwrite(handle: *mut ProcHandle, ps_addr: *mut PsAddr, addr: *mut libc::c_void, size: usize) -> PsErr {
+pub unsafe extern "C" fn ps_pdwrite(handle: *mut ProcHandle, ps_addr: *mut PsAddr, addr: *const libc::c_void, size: usize) -> PsErr {
     ps_trace!("ps_pdwrite({:?}, {:?}, {:?}, {})", *handle, ps_addr, addr, size);
     let pid = (*handle).pid;
+    let _stopper = Stopper::new(pid).expect("could not stop process");
     let mut target_ptr = ps_addr as *mut usize;
     let mut source_ptr = addr as *mut usize;
     let step = std::mem::size_of::<usize>();
     let mut size = size;
     loop {
-        if size > step {
+        if size >= step {
             if let Err(e) = write_data(pid, target_ptr as *mut PsAddr, *source_ptr) {
                 return e;
             }
-            target_ptr = target_ptr.add(1);
-            source_ptr = source_ptr.add(1);
-            size -= step;
+            if size == step {
+                break;
+            }
         } else {
             // read-modify-write necessary to write the remaining bytes.
             match read_data(pid, target_ptr as *mut PsAddr) {
                 Err(e) => { return e; }
                 Ok(word) => {
-                    let new_word = ((usize::max_value() >> size) & word) | ((usize::max_value() << (step - size)) & *source_ptr);
+                    let mut new_word = word;
+                    std::ptr::copy_nonoverlapping(source_ptr as *const u8, &mut new_word as *mut _ as *mut u8, size);
                     if let Err(e) = write_data(pid, target_ptr as *mut PsAddr, new_word) {
                         return e;
                     }
@@ -193,6 +195,9 @@ pub unsafe extern "C" fn ps_pdwrite(handle: *mut ProcHandle, ps_addr: *mut PsAdd
             }
             break;
         }
+        target_ptr = target_ptr.add(1);
+        source_ptr = source_ptr.add(1);
+        size -= step;
     }
     PsErr::Ok
 }
@@ -256,29 +261,88 @@ mod tests {
 
     #[test]
     fn ps_pdread_works() {
-        let mut u64_value = 0x1234567812345678u64;
+        let mut u64_value = 0x1122334455667788u64;
+        let mut u32_value = 0x11223344;
+        let mut string = "abcdefghijklmnopqrstuvwxyz123456879".to_string();
 
         match unsafe { libc::fork() } {
             -1 => panic!("fork failed: {:?}", errno::errno()),
             0 => { // child
-                println!("child value = {:x}", u64_value);
                 std::thread::sleep(std::time::Duration::from_millis(2000));
                 println!("child exiting");
                 std::process::exit(0);
             },
             pid => { // parent
-                let mut handle = ProcHandle::new(pid)
-                    .expect("creating ProcHandle failed");
-                let mut result: u64 = 0;
                 unsafe {
+                    let mut handle = ProcHandle::new(pid)
+                        .expect("creating ProcHandle failed");
+                    let mut result: u64 = 0;
                     assert_eq!(
                         ps_pdread(&mut handle, &mut u64_value as *mut _ as *mut c_void, &mut result as *mut _ as *mut c_void, size_of::<u64>()),
                         PsErr::Ok);
-                    assert_eq!(result, 0x1234567812345678u64);
+                    assert_eq!(result, 0x1122334455667788u64);
 
-                    // done, kill child
-                    libc::kill(pid, libc::SIGTERM);
+                    result = 0;
+                    assert_eq!(
+                        ps_pdread(&mut handle, &mut u32_value as *mut _ as *mut c_void, &mut result as *mut _ as *mut c_void, size_of::<u32>()),
+                        PsErr::Ok);
+                    assert_eq!(result, 0x11223344);
+
+                    let mut strresult = vec![0u8; string.len()];
+                    assert_eq!(
+                        ps_pdread(&mut handle, string.as_bytes_mut() as *mut _ as *mut c_void, strresult.as_mut_slice().as_mut_ptr() as *mut c_void, string.len()),
+                        PsErr::Ok);
+                    assert_eq!(String::from_utf8_lossy(&strresult), "abcdefghijklmnopqrstuvwxyz123456879");
                 }
+                // done, kill child after detaching
+                unsafe { libc::kill(pid, libc::SIGTERM); }
+            }
+        }
+    }
+
+    #[test]
+    fn ps_pdwrite_works() {
+        let copy_str = "abcdefghijklmnopqrstuvwxyz123456879";
+        let mut u64_result = 0;
+        let mut u32_result = 0;
+        let mut str_result = vec![0u8; copy_str.len()];
+        let str_result_ptr = str_result.as_mut_slice().as_mut_ptr();
+
+        let parent_pid = std::process::id();
+
+        match unsafe { libc::fork() } {
+            -1 => panic!("fork failed: {:?}", errno::errno()),
+            0 => { // child
+                eprintln!("child startup");
+                let mut handle = ProcHandle::new(parent_pid as i32)
+                    .expect("creating ProcHandle failed");
+
+                unsafe {
+                    let mut u64_value = 0x1122334455667788u64;
+                    let mut u32_value = 0x11223344;
+                    assert_eq!(
+                        ps_pdwrite(&mut handle, &mut u64_result as *mut _ as *mut c_void, &mut u64_value as *mut _ as *mut c_void, size_of::<u64>()),          
+                        PsErr::Ok);
+                    assert_eq!(
+                        ps_pdwrite(&mut handle, &mut u32_result as *mut _ as *mut c_void, &mut u32_value as *mut _ as *mut c_void, size_of::<u32>()),          
+                        PsErr::Ok);
+                    assert_eq!(
+                        ps_pdwrite(&mut handle, str_result_ptr as *mut c_void, copy_str as *const _ as *const c_void, copy_str.len()),          
+                        PsErr::Ok);
+                }
+
+                std::process::exit(0);
+            },
+            pid => { // parent
+                // The child will modify our variables. Wait for it to exit.
+                if let nix::sys::wait::WaitStatus::Exited(_pid, status) = nix::sys::wait::waitpid(Some(nix::unistd::Pid::from_raw(pid)), None).unwrap() {
+                    assert_eq!(status, 0);
+                } else {
+                    panic!("child did not exit correctly");
+                }
+                assert_eq!(u64_result, 0x1122334455667788u64);
+                assert_eq!(u32_result, 0x11223344);
+                assert_eq!(String::from_utf8_lossy(&str_result), copy_str);
             }
         }
     }
