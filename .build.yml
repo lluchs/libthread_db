@@ -1,0 +1,12 @@
+image: archlinux
+packages:
+  - rust
+sources:
+  - https://github.com/lluchs/libthread_db
+tasks:
+  - build: |
+      cd libthread_db
+      cargo build
+  - test: |
+      cd libthread_db
+      cargo test
