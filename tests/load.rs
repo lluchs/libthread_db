@@ -19,9 +19,14 @@ fn self_attach_works() {
             std::thread::sleep(std::time::Duration::from_millis(2000));
         },
         ForkResult::Parent { child, .. } => {
-            let process = lib.attach(child.as_raw()).unwrap();
+            let mut process = lib.attach(child.as_raw()).unwrap();
             // TODO: Looks like it always reports 0.
             assert_eq!(process.get_nthreads().unwrap(), 0);
+
+            // Note: These functions are not actually implemented in glibc.
+            process.enable_stats(true).expect("enable_stats failed");
+            let stats = process.get_stats().expect("get_stats failed");
+            process.reset_stats().expect("reset_stats failed");
         },
     }
 }

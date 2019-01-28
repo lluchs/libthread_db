@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 
-pub use thread_db::TdErr;
+pub use thread_db::{TdErr, TdTaStats};
 use thread_db::TdThrAgent;
 use proc_service::ProcHandle;
 
@@ -161,6 +161,7 @@ pub struct Process<'a> {
 }
 
 impl Process<'_> {
+    /// Get number of currently running threads in process associated with TA.
     pub fn get_nthreads(&self) -> Result<i32, TdErr> {
         let mut result: i32 = 42;
         unsafe {
@@ -168,6 +169,35 @@ impl Process<'_> {
         }
         Ok(result)
     }
+
+    /// Enable collecting statistics for process associated with TA.
+    /// *Note*: Not implemented in glibc.
+    pub fn enable_stats(&mut self, enable: bool) -> Result<(), TdErr> {
+        unsafe {
+            td_try!(self.lib.api.td_ta_enable_stats(self.ta, enable as i32));
+        }
+        Ok(())
+    }
+
+    /// Reset statistics.
+    /// *Note*: Not implemented in glibc.
+    pub fn reset_stats(&mut self) -> Result<(), TdErr> {
+        unsafe {
+            td_try!(self.lib.api.td_ta_reset_stats(self.ta));
+        }
+        Ok(())
+    }
+
+    /// Retrieve statistics from process associated with TA.
+    /// *Note*: Not implemented in glibc.
+    pub fn get_stats(&self) -> Result<TdTaStats, TdErr> {
+        let mut result: TdTaStats = Default::default();
+        unsafe {
+            td_try!(self.lib.api.td_ta_get_stats(self.ta, &mut result));
+        }
+        Ok(result)
+    }
+
 }
 
 impl Drop for Process<'_> {

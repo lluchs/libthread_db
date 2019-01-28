@@ -64,6 +64,32 @@ pub enum TdErr {
 /// Opaque type.
 pub type TdThrAgent = libc::c_void;
 
+/// Gathered statistics about the process.
+#[derive(Default,Debug)]
+#[repr(C)]
+pub struct TdTaStats {
+    /// Total number of threads in use.
+    pub nthreads: i32,
+    /// Concurrency level requested by user.
+    pub r_concurrency: i32,
+    /// Average runnable threads, numerator.
+    pub nrunnable_num: i32,
+    /// Average runnable threads, denominator.
+    pub nrunnable_den: i32,
+    /// Achieved concurrency level, numerator.
+    pub a_concurrency_num: i32,
+    /// Achieved concurrency level, denominator.
+    pub a_concurrency_den: i32,
+    /// Average number of processes in use, numerator.
+    pub nlwps_num: i32,
+    /// Average number of processes in use, denominator.
+    pub nlwps_den: i32,
+    /// Average number of idling processes, numerator.
+    pub nidle_num: i32,
+    /// Average number of idling processes, denominator.
+    pub nidle_den: i32,
+}
+
 #[derive(WrapperApi)]
 pub struct ThreadDb {
     /// Initialize the thread debug support library.
@@ -72,8 +98,19 @@ pub struct ThreadDb {
     td_ta_new: unsafe extern "C" fn(ps: *mut ProcHandle, ta: *mut *mut TdThrAgent) -> TdErr,
     /// Free resources allocated for TA.
     td_ta_delete: unsafe extern "C" fn(ta: *mut TdThrAgent) -> TdErr,
+
     /// Get number of currently running threads in process associated with TA.
     td_ta_get_nthreads: unsafe extern "C" fn(ta: *const TdThrAgent, np: *mut i32) -> TdErr,
+
+
+    /// Enable collecting statistics for process associated with TA.
+    td_ta_enable_stats: unsafe extern "C" fn(ta: *mut TdThrAgent, enable: i32) -> TdErr,
+
+    /// Reset statistics.
+    td_ta_reset_stats: unsafe extern "C" fn(ta: *mut TdThrAgent) -> TdErr,
+
+    /// Retrieve statistics from process associated with TA.
+    td_ta_get_stats: unsafe extern "C" fn(ta: *const TdThrAgent, stats: *mut TdTaStats) -> TdErr,
 }
 
 pub fn open_lib() -> Container<ThreadDb> {
