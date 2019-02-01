@@ -61,8 +61,6 @@ impl Library {
 fn get_symbols(pid: i32) -> Result<HashMap<String, usize>, Box<std::error::Error>> {
     // Result map.
     let mut symbols = HashMap::new();
-    // Cache to avoid opening libraries multiple times.
-    let mut process_symbols: HashMap<String, HashMap<String, usize>> = HashMap::new();
 
     // The mappings for libpthread look like this:
     //
@@ -79,7 +77,6 @@ fn get_symbols(pid: i32) -> Result<HashMap<String, usize>, Box<std::error::Error
     // understand any mappings other than the first (with offset 0).
     //
     // See also this Stackoverflow question: https://stackoverflow.com/questions/25274569/
-    let mut last_map: Option<proc_maps::MapRange> = None;
     for map in proc_maps::get_process_maps(pid)? {
         // We're only interested in the first entry for each library.
         if map.offset > 0 || map.filename().is_none() {
@@ -209,4 +206,64 @@ impl Drop for Process<'_> {
 
 pub struct Thread {
     handle: *const TdThrHandle,
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    use std::io::{BufRead, BufReader};
+
+    /// Read symbols from the test process and compare to the symbols gdb reads.
+    #[test]
+    fn test_get_symbols() {
+        use nix::unistd::{fork, ForkResult};
+
+        // We need to fork because gdb will stop the process while reading the symbols, preventing
+        // us from capturing its output.
+        match fork().unwrap() {
+            ForkResult::Child => {
+                std::thread::sleep(std::time::Duration::from_millis(2000));
+                std::process::exit(0);
+            },
+            ForkResult::Parent { child, .. } => {
+                let pid = child.as_raw();
+                let symbols = get_symbols(pid as i32).expect("could not get symbols");
+                let gdb_symbols = get_symbols_gdb(pid as i32).expect("could not get gdb symbols");
+                println!("#symbols = {}, #gdb_symbols = {}", symbols.len(), gdb_symbols.len());
+                let mut checked_symbols = 0;
+                for (symbol, offset) in gdb_symbols {
+                    if symbol.contains("nptl") || symbol.contains("_thread_db") {
+                        assert_eq!(symbols[&symbol], offset, "symbol {} does not match: {:x} != {:x}", symbol, symbols[&symbol], offset);
+                        checked_symbols += 1;
+                    }
+                }
+                dbg!(checked_symbols);
+            }
+        }
+    }
+
+    fn get_symbols_gdb(pid: i32) -> Result<HashMap<String, usize>, Box<std::error::Error>> {
+        let mut result = HashMap::new();
+        eprintln!("starting gdb");
+        let child = Command::new("gdb")
+            .arg(format!("--pid={}", pid))
+            .arg("--batch")
+            .arg("-ex").arg("info variables")
+            .stdout(Stdio::piped())
+            .spawn()?;
+
+        let reader = BufReader::new(child.stdout.unwrap());
+
+        for line in reader.lines().filter_map(|line| line.ok()) {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            // Filter unrelated gdb output by searching for lines with a number and some other
+            // word.
+            if tokens.len() == 2 && tokens[0].starts_with("0x") {
+                result.insert(tokens[1].to_string(), usize::from_str_radix(&tokens[0][2..], 16)?);
+            }
+        }
+        Ok(result)
+    }
 }
