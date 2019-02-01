@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Read;
 
 pub use thread_db::{TdErr, TdTaStats};
-use thread_db::TdThrAgent;
+use thread_db::{TdThrAgent, TdThrHandle, TdThrState};
 use proc_service::ProcHandle;
 
 use dlopen::wrapper::Container;
@@ -198,6 +198,26 @@ impl Process<'_> {
         Ok(result)
     }
 
+    /// Get all threads.
+    pub fn threads(&self) -> Result<Vec<Thread>, TdErr> {
+        // The td_ta_thr_iter function will call the callback function for each thread. Save the
+        // results in a Vec so that we can iterate over it.
+        let mut threads = Vec::new();
+        unsafe {
+            let sigmask = nix::sys::signal::SigSet::empty();
+            let mut c_sigmask = sigmask.as_ref().clone();
+            td_try!(self.lib.api.td_ta_thr_iter(self.ta, thr_iter_callback, &mut threads as *mut _ as *mut libc::c_void, TdThrState::AnyState, 0, &mut c_sigmask, 0));
+        }
+        Ok(threads)
+    }
+
+}
+
+/// Appends the thread handle to the Vec<Process> in cbdata.
+unsafe extern "C" fn thr_iter_callback(handle: *const TdThrHandle, cbdata: *mut libc::c_void) -> i32 {
+    let threads = cbdata as *mut Vec<Thread>;
+    (*threads).push(Thread { handle });
+    0
 }
 
 impl Drop for Process<'_> {
@@ -209,4 +229,8 @@ impl Drop for Process<'_> {
             }
         }
     }
+}
+
+pub struct Thread {
+    handle: *const TdThrHandle,
 }

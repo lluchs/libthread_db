@@ -61,8 +61,25 @@ pub enum TdErr {
     NoTLS,
 }
 
-/// Opaque type.
+/// Handle for a process. Opaque type.
 pub type TdThrAgent = libc::c_void;
+/// The actual thread handle type. Opaque type.
+pub type TdThrHandle = libc::c_void;
+
+/// Possible thread states.  AnyState is a pseudo-state used to
+/// select threads regardless of state in td_ta_thr_iter().
+#[allow(dead_code)]
+#[repr(C)]
+pub enum TdThrState {
+    AnyState,
+    Unknown,
+    Stopped,
+    Run,
+    Active,
+    Zombie,
+    Sleep,
+    StoppedAsleep,
+}
 
 /// Gathered statistics about the process.
 #[derive(Default,Debug)]
@@ -102,15 +119,20 @@ pub struct ThreadDb {
     /// Get number of currently running threads in process associated with TA.
     td_ta_get_nthreads: unsafe extern "C" fn(ta: *const TdThrAgent, np: *mut i32) -> TdErr,
 
-
     /// Enable collecting statistics for process associated with TA.
     td_ta_enable_stats: unsafe extern "C" fn(ta: *mut TdThrAgent, enable: i32) -> TdErr,
-
     /// Reset statistics.
     td_ta_reset_stats: unsafe extern "C" fn(ta: *mut TdThrAgent) -> TdErr,
-
     /// Retrieve statistics from process associated with TA.
     td_ta_get_stats: unsafe extern "C" fn(ta: *const TdThrAgent, stats: *mut TdTaStats) -> TdErr,
+
+    /// Call for each thread in a process associated with TA the callback function CALLBACK.
+    /// From looking at the glibc implementation:
+    ///  - Return value of `callback`: 0 => ok, _ => error
+    ///  - `state`: must be `TdThrState::AnyState`
+    ///  - `ti_prio`: minimum priority (probably 0 for all)
+    ///  - `ti_sigmask` and `ti_user_flags` are unused
+    td_ta_thr_iter: unsafe extern "C" fn(ta: *mut TdThrAgent, callback: unsafe extern "C" fn(handle: *const TdThrHandle, cbdata: *mut libc::c_void) -> i32, cbdata: *mut libc::c_void, state: TdThrState, pri: i32, ti_sigmask: *mut libc::sigset_t, ti_user_flags: u32) -> TdErr,
 }
 
 pub fn open_lib() -> Container<ThreadDb> {

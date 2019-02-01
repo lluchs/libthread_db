@@ -27,6 +27,9 @@ fn self_attach_works() {
             process.enable_stats(true).expect("enable_stats failed");
             let stats = process.get_stats().expect("get_stats failed");
             process.reset_stats().expect("reset_stats failed");
+
+            let threads = process.threads().expect("getting threads failed");
+            println!("#threads = {}", threads.len());
         },
     }
 }
