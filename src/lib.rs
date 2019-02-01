@@ -75,48 +75,24 @@ fn get_symbols(pid: i32) -> Result<HashMap<String, usize>, Box<std::error::Error
     //
     // Some symbols (like __nptl_nthreads at 0x1d2e0 in the ELF file) end up in the last anonymous
     // mapping region, even if they're in the .data section (in the example, __nptl_nthreads ends
-    // up at 0x77ffff7f952e0). To account for these symbols, the following code treats anonymous
-    // sections as extensions of the previous shared library.
+    // up at 0x77ffff7f952e0). To account for these symbols, the following code doesn't try to
+    // understand any mappings other than the first (with offset 0).
     //
     // See also this Stackoverflow question: https://stackoverflow.com/questions/25274569/
     let mut last_map: Option<proc_maps::MapRange> = None;
     for map in proc_maps::get_process_maps(pid)? {
-        let (filename, map_offset) = if let Some(filename) = map.filename() {
-            if filename.chars().next() == Some('/') {
-                last_map = Some(map.clone());
-                (filename.clone(), map.offset)
-            } else {
-                continue
-            }
-        } else if let Some(ref last_map) = last_map {
-            // The current mapping is anonymous. Consider it part of the previous library if it
-            // continues without a gap.
-            // TODO: This won't work if the library has multiple anonymous mappings.
-            if last_map.start() + last_map.size() == map.start() {
-                if let Some(filename) = last_map.filename() {
-                    (filename.clone(), last_map.offset + last_map.size())
-                } else {
-                    continue
-                }
-            } else {
-                continue
-            }
-        } else {
-            continue
-        };
+        // We're only interested in the first entry for each library.
+        if map.offset > 0 || map.filename().is_none() {
+            continue;
+        }
+        let filename = map.filename().as_ref().unwrap();
+        // We can only read files, skip mappings to [stack] etc.
+        if !filename.starts_with("/") {
+            continue;
+        }
 
-        let syms = if process_symbols.contains_key(&filename) {
-            &process_symbols[&filename]
-        } else {
-            &*process_symbols.entry(filename.clone())
-                .or_insert(get_symbols_for_library(&filename)?)
-        };
-        for (symbol, offset) in syms {
-            // Is the symbol in the current map range? A library usually has multiple
-            // ranges (code/data).
-            if *offset >= map_offset && *offset < map_offset + map.size() {
-                symbols.insert(symbol.to_string(), *offset - map_offset + map.start());
-            }
+        for (symbol, offset) in get_symbols_for_library(&filename)? {
+            symbols.insert(symbol.to_string(), offset + map.start());
         }
     }
     Ok(symbols)

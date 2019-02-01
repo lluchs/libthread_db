@@ -20,8 +20,7 @@ fn self_attach_works() {
         },
         ForkResult::Parent { child, .. } => {
             let mut process = lib.attach(child.as_raw()).unwrap();
-            // TODO: Looks like it always reports 0.
-            assert_eq!(process.get_nthreads().unwrap(), 0);
+            assert_eq!(process.get_nthreads().unwrap(), 1);
 
             // Note: These functions are not actually implemented in glibc.
             process.enable_stats(true).expect("enable_stats failed");
@@ -29,7 +28,7 @@ fn self_attach_works() {
             process.reset_stats().expect("reset_stats failed");
 
             let threads = process.threads().expect("getting threads failed");
-            println!("#threads = {}", threads.len());
+            assert_eq!(threads.len(), 1);
         },
     }
 }
