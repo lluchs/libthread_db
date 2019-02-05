@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 
-pub use thread_db::{TdErr, TdTaStats};
+pub use thread_db::{TdErr, TdTaStats, TdThrInfo};
 use thread_db::{TdThrAgent, TdThrHandle, TdThrState};
 use proc_service::ProcHandle;
 
@@ -175,21 +175,21 @@ impl Process<'_> {
     pub fn threads(&self) -> Result<Vec<Thread>, TdErr> {
         // The td_ta_thr_iter function will call the callback function for each thread. Save the
         // results in a Vec so that we can iterate over it.
-        let mut threads = Vec::new();
+        let mut handles: Vec<TdThrHandle> = Vec::new();
         unsafe {
             let sigmask = nix::sys::signal::SigSet::empty();
             let mut c_sigmask = sigmask.as_ref().clone();
-            td_try!(self.lib.api.td_ta_thr_iter(self.ta, thr_iter_callback, &mut threads as *mut _ as *mut libc::c_void, TdThrState::AnyState, 0, &mut c_sigmask, 0));
+            td_try!(self.lib.api.td_ta_thr_iter(self.ta, thr_iter_callback, &mut handles as *mut _ as *mut libc::c_void, TdThrState::AnyState, 0, &mut c_sigmask, 0));
         }
-        Ok(threads)
+        Ok(handles.iter().map(|handle| Thread { lib: self.lib, handle: *handle }).collect())
     }
 
 }
 
 /// Appends the thread handle to the Vec<Process> in cbdata.
 unsafe extern "C" fn thr_iter_callback(handle: *const TdThrHandle, cbdata: *mut libc::c_void) -> i32 {
-    let threads = cbdata as *mut Vec<Thread>;
-    (*threads).push(Thread { handle });
+    let threads = cbdata as *mut Vec<TdThrHandle>;
+    (*threads).push(*handle);
     0
 }
 
@@ -204,8 +204,28 @@ impl Drop for Process<'_> {
     }
 }
 
-pub struct Thread {
-    handle: *const TdThrHandle,
+pub struct Thread<'a> {
+    lib: &'a Library,
+    handle: TdThrHandle,
+}
+
+impl Thread<'_> {
+    /// Validate that this is a thread handle.
+    pub fn validate(&self) -> Result<(), TdErr> {
+        unsafe {
+            td_try!(self.lib.api.td_thr_validate(&self.handle));
+        }
+        Ok(())
+    }
+
+    /// Return information about the thread.
+    pub fn info(&self) -> Result<TdThrInfo, TdErr> {
+        unsafe {
+            let mut info: TdThrInfo = std::mem::zeroed();
+            td_try!(self.lib.api.td_thr_get_info(&self.handle, &mut info));
+            Ok(info)
+        }
+    }
 }
 
 

@@ -16,11 +16,13 @@ fn self_attach_works() {
 
     match fork().unwrap() {
         ForkResult::Child => {
-            std::thread::sleep(std::time::Duration::from_millis(2000));
+            let thread = std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_millis(2000)));
+            thread.join().unwrap();
+            std::process::exit(0);
         },
         ForkResult::Parent { child, .. } => {
             let mut process = lib.attach(child.as_raw()).unwrap();
-            assert_eq!(process.get_nthreads().unwrap(), 1);
+            assert_eq!(process.get_nthreads().unwrap(), 2);
 
             // Note: These functions are not actually implemented in glibc.
             process.enable_stats(true).expect("enable_stats failed");
@@ -28,7 +30,11 @@ fn self_attach_works() {
             process.reset_stats().expect("reset_stats failed");
 
             let threads = process.threads().expect("getting threads failed");
-            assert_eq!(threads.len(), 1);
+            assert_eq!(threads.len(), 2);
+
+            threads.iter().for_each(|t|t.validate().expect("thread is valid"));
+            let info = threads[0].info().expect("getting thread info failed");
+            println!("thread 0 info: {:?}", info);
         },
     }
 }

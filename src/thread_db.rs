@@ -5,7 +5,7 @@
 use dlopen_derive::WrapperApi;
 use dlopen::wrapper::{Container, WrapperApi};
 
-use crate::proc_service::ProcHandle;
+use crate::proc_service::{ProcHandle, PsAddr};
 
 #[derive(Debug)]
 #[repr(C)]
@@ -63,12 +63,18 @@ pub enum TdErr {
 
 /// Handle for a process. Opaque type.
 pub type TdThrAgent = libc::c_void;
-/// The actual thread handle type. Opaque type.
-pub type TdThrHandle = libc::c_void;
+
+/// The actual thread handle type `td_thrhandle_t`. Opaque (but copyable) type.
+#[derive(Copy, Clone)]
+pub struct TdThrHandle {
+    _th_ta_p: *mut TdThrAgent,
+    _th_unique: *mut PsAddr,
+}
 
 /// Possible thread states.  AnyState is a pseudo-state used to
 /// select threads regardless of state in td_ta_thr_iter().
 #[allow(dead_code)]
+#[derive(Debug)]
 #[repr(C)]
 pub enum TdThrState {
     AnyState,
@@ -79,6 +85,24 @@ pub enum TdThrState {
     Zombie,
     Sleep,
     StoppedAsleep,
+}
+
+/// Thread type: user or system.  TD_THR_ANY_TYPE is a pseudo-type used
+/// to select threads regardless of type in td_ta_thr_iter().
+#[allow(dead_code)]
+#[derive(Debug)]
+#[repr(C)]
+pub enum TdThrType {
+  AnyType,
+  User,
+  System
+}
+
+///Bitmask of enabled events.
+#[derive(Debug)]
+#[repr(C)]
+pub struct TdThrEvents {
+    event_bits: [u32; 2],
 }
 
 /// Gathered statistics about the process.
@@ -107,6 +131,64 @@ pub struct TdTaStats {
     pub nidle_den: i32,
 }
 
+/// Information about the thread.
+#[repr(C)]
+pub struct TdThrInfo {
+    /// Process handle.
+    ti_ta_p: *mut TdThrAgent,
+    /// Unused.
+    ti_user_flags: libc::c_uint,
+    /// Thread ID returned by pthread_create().
+    pub ti_tid: libc::pthread_t,
+    /// Pointer to thread-local data.
+    pub ti_tls: *mut u8,
+    /// Start function passed to pthread_create().
+    pub ti_startfunc: *mut PsAddr,
+    /// Base of thread's stack.
+    pub ti_stkbase: *mut PsAddr,
+    /// Size of thread's stack.
+    pub ti_stksize: libc::c_long,
+    /// Unused.
+    ti_ro_area: *mut PsAddr,
+    /// Unused.
+    ti_ro_size: libc::c_int,
+    /// Thread state.
+    pub ti_state: TdThrState,
+    /// Nonzero if suspended by debugger
+    pub ti_db_suspended: libc::c_uchar,
+    /// Type of the thread (system vs user thread).
+    pub ti_type: TdThrType,
+    /// Unused.
+    ti_pc: libc::intptr_t,
+    /// Unused.
+    ti_sp: libc::intptr_t,
+    /// Unused.
+    ti_flags: libc::c_ushort,
+    /// Thread priority.
+    pub ti_pri: libc::c_int,
+    /// Kernel PID for this thread.
+    pub ti_lid: libc::pid_t,
+    /// Signal mask.
+    pub ti_sigmask: libc::sigset_t,
+    /// Nonzero if event reporting enabled.
+    pub ti_traceme: libc::c_uchar,
+    /// Unused.
+    ti_preemptflag: libc::c_uchar,
+    /// Unused.
+    ti_pirecflag: libc::c_uchar,
+    /// Set of pending signals.
+    pub ti_pending: libc::sigset_t,
+    /// Set of enabled events.
+    pub ti_events: TdThrEvents,
+}
+
+impl std::fmt::Debug for TdThrInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "TdThrInfo {{ ti_tid: {}, ti_type: {:?}, ti_pri: {}, ti_lid: {} }}",
+               self.ti_tid, self.ti_type, self.ti_pri, self.ti_lid)
+    }
+}
+
 #[derive(WrapperApi)]
 pub struct ThreadDb {
     /// Initialize the thread debug support library.
@@ -133,6 +215,13 @@ pub struct ThreadDb {
     ///  - `ti_prio`: minimum priority (probably 0 for all)
     ///  - `ti_sigmask` and `ti_user_flags` are unused
     td_ta_thr_iter: unsafe extern "C" fn(ta: *mut TdThrAgent, callback: unsafe extern "C" fn(handle: *const TdThrHandle, cbdata: *mut libc::c_void) -> i32, cbdata: *mut libc::c_void, state: TdThrState, pri: i32, ti_sigmask: *mut libc::sigset_t, ti_user_flags: u32) -> TdErr,
+
+
+    /// Validate that TH is a thread handle.
+    td_thr_validate: unsafe extern "C" fn(handle: *const TdThrHandle) -> TdErr,
+
+    /// Return information about thread TH.
+    td_thr_get_info: unsafe extern "C" fn(handle: *const TdThrHandle, info: *mut TdThrInfo) -> TdErr,
 }
 
 pub fn open_lib() -> Container<ThreadDb> {
